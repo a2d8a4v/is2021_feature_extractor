@@ -1,0 +1,32 @@
+import json
+import argparse
+from utils import jsonLoad, openappend
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--input_json",
+                    default="./data/train/gigaspeech/all.json",
+                    type=str)
+
+parser.add_argument("--output_json",
+                    default="./data/train/gigaspeech/all.new.json",
+                    type=str)
+
+parser.add_argument("--append_column_file",
+                    default="./data/train/gigaspeech/append",
+                    type=str)
+
+args = parser.parse_args()
+
+_dict = openappend(args.append_column_file)
+_json = jsonLoad(args.input_json)
+
+_new = {"utts":{}}
+for utt_id, data in _json.items():
+    new = data
+    for t, r in _dict.items():
+        new[t] = r
+    _new["utts"][utt_id] = new
+
+with open(args.output_json, "w") as fn:
+    json.dump(_new, fn, indent=4)

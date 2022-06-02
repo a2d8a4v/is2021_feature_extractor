@@ -1,0 +1,252 @@
+import os
+import json
+import argparse
+import logging
+from tqdm import tqdm
+from espnet_models import SpeechModel
+from audio_models import AudioModel
+from vad_model import VadModel
+from espnet.utils.cli_utils import strtobool
+from utils import pickleStore, pikleOpen, jsonLoad, opendict, opentext, readwav
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--data_dir",
+                    default="/share/nas165/teinhonglo/AcousticModel/2020AESRC/s5/data/cv_56",
+                    type=str)
+
+parser.add_argument("--model_tag",
+                    default="Shinji Watanabe/gigaspeech_asr_train_asr_raw_en_bpe5000_valid.acc.ave", #https://github.com/espnet/espnet/issues/3018: LSTM pretrained-model
+                    type=str)
+
+parser.add_argument("--model_name",
+                    default="gigaspeech",
+                    type=str)
+
+parser.add_argument("--ngpu",
+                    default=0,
+                    type=str)
+
+parser.add_argument("--sample_rate",
+                    default=16000,
+                    type=int)
+
+parser.add_argument("--vad_mode",
+                    default=1,
+                    type=int)
+
+parser.add_argument("--tag",
+                    default="",
+                    type=str)
+
+parser.add_argument("--dict",
+                    default="/share/nas167/a2y3a1N0n2Yann/speechocean/espnet_amazon/egs/tlt-school/acoustic_phonetic_features/data/local/dict/lexicon.txt",
+                    type=str,
+                    required=True)
+
+parser.add_argument("--long_decode_mode",
+                    default=False,
+                    type=strtobool)
+
+
+args = parser.parse_args()
+
+data_dir = args.data_dir
+model_name = args.model_name
+output_dir = os.path.join(data_dir, model_name+"_"+args.tag)
+
+# logging file path assign
+logging.basicConfig(filename=data_dir + "/prepare_feats_log", level=logging.DEBUG)
+
+if not os.path.exists(output_dir):
+    os.mkdir(output_dir)
+
+sample_rate = args.sample_rate
+vad_mode = args.vad_mode
+tag = args.model_tag
+wavscp_dict = {}
+text_dict = {}
+utt_list = []
+err_list = []
+predicts = []
+labels   = []
+all_info = {}
+ctm_dict = {} # stt and ctm
+word2phn_dict = opendict(args.dict) # word to phone dict
+
+# move text load beforehand to avoid unpredicable error in dict and save more time and your GPU memory
+with open(data_dir + "/text", "r") as fn:
+    for line in fn.readlines():
+        info = line.split()
+        text_dict[info[0]] = " ".join(info[1:]).upper() # Due to the tokens inside gigaspeech ad wsj is upper-case, we need to change the text to upper-case also.
+
+# validate the dict has all the words inside
+_t = opentext(data_dir + "/text", 1, )
+_w = sum([ 1 for w in _t if w.lower() not in list(word2phn_dict.keys())])
+if _w > 0:
+    print("{} words are not inside the dictionary!".format(_w))
+    exit()
+
+device = "cuda" if int(args.ngpu) > 0 else "cpu"
+
+speech_model = SpeechModel(tag, device)
+audio_model = AudioModel()
+vad_model = VadModel(vad_mode, sample_rate)
+
+tmp_apl_decoding = "tmp_apl_decoding_"+args.tag if args.tag else "tmp_apl_decoding"
+
+with open(data_dir + "/wav.scp", "r") as fn:
+    for i, line in enumerate(fn.readlines()):
+        info = line.split()
+        wavscp_dict[info[0]] = info[1]
+        utt_list.append(info[0])
+
+if os.path.isfile(output_dir + "/error"):
+    with open(output_dir + "/error", "r") as fn:
+        for utt_id in fn.readlines():
+            err_list.append(utt_id.split()[0])
+
+if args.s2t:
+    print("Free Speaking")
+else:
+    print("Reading")
+
+## Here is the memory problem here if load all data into memory
+if os.path.exists(os.path.join(data_dir, tmp_apl_decoding+".list")):
+    print("Decoded features loading...")
+    with open(os.path.join(data_dir, tmp_apl_decoding+".list"), "r") as fn:
+        for l in tqdm(fn.readlines()):
+            l_ = l.split()
+            all_info[l_[0]] = pikleOpen(l_[1])
+all_info = jsonLoad(output_dir + "/all.json")["utts"]
+
+print("Decoding Start")
+
+for utt_id in tqdm(utt_list):
+
+    if utt_id in all_info:
+        continue
+
+    # skip error
+    if utt_id in err_list:
+        continue
+
+    wav_path = wavscp_dict[utt_id]
+    text_prompt = text_dict[utt_id]
+    # Confirm the sampling rate is equal to that of the training corpus.
+    # If not, you need to resample the audio data before inputting to speech2text
+    speech, rate = readwav(wav_path, sample_rate)
+
+    audio, rate = vad_model.read_wave(wav_path)
+    speech = np.frombuffer(audio, dtype='int16').astype(np.float32) / 32768.0
+    assert rate == 16000
+
+    response_duration = speech.shape[0] / rate
+
+    # audio feature
+    _, f0_info = audio_model.get_f0(speech)
+    _, energy_info = audio_model.get_energy(speech)
+
+    # We tested to use s2t mode before, and we found that the probabilities of the word predicted by model is at a normal range. Thus, we consider using prompt as input but get confidence score 0 is also a normal thing, not the problem with the acouostic model trained by gigaspeech.
+    if args.s2t: # for free speaking condition
+
+        # fluency feature and confidence feature
+        # BUG: Some audio are too long, need to partitate by VAD before recognizing
+        speechs = vad_model.get_speech_segments(audio, rate)
+        text = []
+        for speech_seg in speechs:
+            text_seg = speech_model.recog(speech_seg)
+            text.append(text_seg)
+        text = " ".join(" ".join(text).split())
+
+        # BUG: Because of the two dictionaries have different words, we need to extend the dictionary with G2P toolkit
+        word2phn_dict = speech_model.g2p(text, word2phn_dict) # Update word2phn dict to prevent from indexing error of words
+
+        label = text_prompt
+        predicts.append(text)
+        labels.append(label)
+    else:
+        text = text_dict[utt_id]
+    
+    # alignment (stt)
+    try:
+        ctm_info = speech_model.get_ctm(speech, text)
+    except:
+        try:
+            text = speech_model.recog(speech)
+            ctm_info = speech_model.get_ctm(speech, text)
+        except:
+            print("{}: the audio is shorter than text!".format(utt_id))
+            save = {"state": 0}
+            all_info[utt_id] = save
+            err_list.append(utt_id)
+            continue
+
+    try:
+        sil_feats_info = speech_model.sil_feats(ctm_info, response_duration)
+    except:
+        err_list.append(utt_id)
+        save = {"state": 0}
+        all_info[utt_id] = save
+        continue
+    rhythm_info = speech_model.get_rhythm(ctm_info, word2phn_dict)
+    word_feats_info = speech_model.word_feats(ctm_info, response_duration)
+    save = {
+                "state": 1,
+                "stt": text,
+                "wav_path": wav_path,
+                "ctm": ctm_info,
+                "rhythm": rhythm_info,
+                **f0_info,
+                **energy_info,
+                **sil_feats_info,
+                **word_feats_info
+    }
+    if args.s2t:
+        save["wer"] = speech_model.wer(predicts, labels)
+    all_info[utt_id] = save
+
+    # due to costing too much time on decoding, we need to save the information of each decoding result
+    if args.long_decode_mode:
+        fp = os.path.join(data_dir, tmp_apl_decoding)
+        if not os.path.isdir(fp):
+            os.mkdir(fp)
+        pickleStore(save, os.path.join(fp, utt_id+".pkl"))
+        with open(os.path.join(data_dir, tmp_apl_decoding+".list"), "a") as fn:
+            fn.write("{} {}\n".format(utt_id, os.path.join(fp, utt_id+".pkl")))
+
+print(output_dir)
+# record error
+if err_list:
+    with open(output_dir + "/error", "w") as fn:
+        for utt_id in err_list:
+            fn.write(utt_id + "\n")
+
+with open(output_dir + "/all.json", "w") as fn:
+    json.dump({"utts": all_info}, fn, indent=4)
+
+# write STT Result to file
+with open(output_dir + "/text", "w") as fn:
+    for utt_id in utt_list:
+
+        # skip error
+        if utt_id in err_list:
+            continue
+
+        fn.write(utt_id + " " + all_info[utt_id]["stt"] + "\n")
+
+# write alignment results fo file
+with open(output_dir + "/ctm", "w") as fn:
+    end_time = -100000
+    for utt_id in utt_list:
+
+        # skip error
+        if utt_id in err_list:
+            continue
+
+        ctm_infos = all_info[utt_id]["ctm"]
+        for i in range(len(ctm_infos)):
+            text_info, start_time, duration, conf = ctm_infos[i]
+            # utt_id channel start_time duration text conf
+            ctm_info = " ".join([utt_id, "1", str(start_time), str(duration), text_info, str(conf)])
+            fn.write(ctm_info + "\n")

@@ -1,0 +1,35 @@
+import json
+import argparse
+from utils import jsonLoad
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--input_json",
+                    default="./data/train/gigaspeech/all.json",
+                    type=str)
+
+parser.add_argument("--input_cerflabel",
+                    default="./data/train/gigaspeech/all.json",
+                    type=str)
+
+parser.add_argument("--output_json",
+                    default="./data/train/gigaspeech/all.new.json",
+                    type=str)
+
+parser.add_argument("--filter_len",
+                    default=10,
+                    type=int)
+
+args = parser.parse_args()
+
+_json = jsonLoad(args.input_json)["utts"]
+
+_new = {"utts":{}}
+for utt_id, data in _json.items():
+    if data.get("output")[0].get("shape")[0] < args.filter_len:
+        continue
+    new = data
+    _new["utts"][utt_id] = new
+
+with open(args.output_json, "w") as fn:
+    json.dump(_new, fn, indent=4)

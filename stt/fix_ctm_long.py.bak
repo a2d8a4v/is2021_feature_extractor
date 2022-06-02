@@ -1,0 +1,34 @@
+import json
+import argparse
+from utils import jsonLoad
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--input_json",
+                    default="./data/train/gigaspeech/all.json",
+                    type=str)
+
+parser.add_argument("--output_json",
+                    default="./data/train/gigaspeech/all.new.json",
+                    type=str)
+
+args = parser.parse_args()
+
+_json = jsonLoad(args.input_json)["utts"]
+
+_new = {"utts":{}}
+a = []
+for utt_id, data in _json.items():
+    if utt_id == "1030105_en_21_19_100":
+        continue
+    if len(data.get("input")[1].get("ctm")) != data.get("output")[0].get("shape")[0]:
+        print("{} {} {}".format(utt_id, len(data.get("input")[1].get("ctm")), data.get("output")[0].get("shape")[0]) )
+        a.append(utt)
+        continue
+    new = data
+    _new["utts"][utt_id] = new
+
+print(a)
+
+# with open(args.output_json, "w") as fn:
+#     json.dump(_new, fn, indent=4)

@@ -1,0 +1,433 @@
+# import argparse
+# import textgrid
+import math
+import os
+
+# @https://github.com/Shahabks/Thought-Speech-analysis-
+# @https://chrisearch.wordpress.com/2017/03/11/speech-recognition-using-kaldi-extending-and-using-the-aspire-model/
+# @https://stackoverflow.com/questions/37608115/how-can-i-add-new-words-or-vocabulary-into-kaldi-platform
+
+# args
+# parser = argparse.ArgumentParser(description='Process some integers.')
+# parser.add_argument('--input_file', default="data/textgrid", type=str)
+# parser.add_argument('--cv_output_file', default="data/cv_output", type=str)
+# parser.add_argument('--im_output_file', default="data/im_output", type=str)
+# parser.add_argument('--kaldi_type', default="true", type=str)
+# args = parser.parse_args()
+
+# Variables
+filter_out = '@sil'
+# _dict      = {}
+# list(set(['p', 'w', 'zh', 'hh', 'f', 'd', 'th', 's', 't', 'n', 'l', 'm', 'b', 'g', 'ng', 'jh', 'z', 'v', 'dh', 'sh', 'k', 'r', 'ch']+['p', 'b', 't', 'd', 'k', 'g', 'ch', 'jh', 'f', 'v', 'th', 'dh', 's', 'z', 'sh', 'zh', 'hh']))
+# ['l', 'zh', 's', 'z', 'ng', 'g', 'k', 'th', 'd', 'dh', 'w', 'p', 'n', 't', 'r', 'sh', 'ch', 'hh', 'b', 'jh', 'f', 'm', 'v']
+# list(set(['er', 'iy', 'aa', 'aw', 'eh', 'ey', 'ow', 'uw', 'uh', 'ao', 'ae', 'oy', 'ih', 'ah', 'y', 'ay']+['ao', 'aa', 'iy', 'uw', 'eh', 'ih', 'uh', 'ah', 'ax', 'ae', 'ey', 'ay', 'ow', 'aw', 'oy', 'er', 'axr', 'y', 'w', 'q']))
+# ['ah', 'aa', 'ih', 'aw', 'w', 'axr', 'ow', 'ao', 'y', 'eh', 'ay', 'uh', 'q', 'ey', 'ae', 'iy', 'oy', 'uw', 'ax', 'er']
+
+# Ready to write files
+# cv = open(args.cv_output_file, "a")
+# im = open(args.im_output_file, "a")
+
+# Functions
+def rPVI(whi, num, arr, type=None):
+    if type == whi.get_v():
+        arr = [i for i in arr if i.get_type() == whi.get_v()]
+    elif type == whi.get_c():
+        arr = [i for i in arr if i.get_type() == whi.get_c()]
+    return (1/(num-1))*sum([abs(arr[i+1].get_dur() - arr[i].get_dur()) for i in range(0, len(arr)-1)])
+
+def nPVI(whi, num, arr, type=None):
+    if type == whi.get_v():
+        arr = [i for i in arr if i.get_type() == whi.get_v()]
+    elif type == whi.get_c():
+        arr = [i for i in arr if i.get_type() == whi.get_c()]
+    return (1/(num-1))*sum([abs(arr[i+1].get_dur() - arr[i].get_dur())/((arr[i+1].get_dur() + arr[i].get_dur())/2) for i in range(0, len(arr)-1)])
+
+def CCI(num, arr):
+    return (1/(num-1))*sum([abs(arr[i+1].get_dur()/len(arr[i+1].get_label()) - arr[i].get_dur()/len(arr[i].get_label())) for i in range(0, len(arr)-1)])
+
+# class
+class Interval(object):
+
+    def __init__(self):
+        self.start = None
+        self.end = None
+        self.duration = None
+        self.label = None
+        self.type = None
+    
+    def set_start(self, s):
+        self.start = s
+        if self.end is not None:
+            self.duration = self.end - self.start
+
+    def set_end(self, e):
+        self.end = e
+        if self.start is not None:
+            self.duration = self.end - self.start
+
+    def set_label(self, l):
+        self.label = l
+
+    def set_type(self, t):
+        self.type = t
+
+    def get_start(self):
+        return self.start
+
+    def get_end(self):
+        return self.end
+
+    def get_label(self):
+        return self.label
+
+    def get_dur(self):
+        return self.duration
+
+    def get_type(self):
+        return self.type
+
+
+class Which(object):
+
+    # @https://hackage.haskell.org/package/hsc3-lang-0.15/docs/src/Sound-SC3-Lang-Data-CMUdict.html
+    def __init__(self):
+        self.consonants = ['l', 'zh', 's', 'z', 'ng', 'g', 'k', 'th', 'd', 'dh', 'w', 'p', 'n', 't', 'r', 'sh', 'ch', 'hh', 'b', 'jh', 'f', 'm', 'v']
+        self.vowels = ['ah', 'aa', 'ih', 'aw', 'w', 'axr', 'ow', 'ao', 'y', 'eh', 'ay', 'uh', 'q', 'ey', 'ae', 'iy', 'oy', 'uw', 'ax', 'er']
+        self.consonant = "C"
+        self.vowel = "V"
+        self.other = "O"
+
+    def _is(self, ph):
+        ph = ph.lower()
+        if ph in self.vowels:
+            return self.vowel
+        elif ph in self.consonants:
+            return self.consonant
+        else:
+            return self.other
+
+    def get_v(self):
+        return self.vowel
+
+    def get_c(self):
+        return self.consonant
+
+    def get_o(self):
+        return self.other
+
+# read textgrid file
+# with open(args.input_file, 'r') as fn:
+#     for l in fn.readlines():
+#         tg = textgrid.TextGrid()
+#         tg.read(l.split()[1])
+#         _dict[l.split()[0]] = tg
+
+
+# Get information from each file
+def calculate(ctm_info, word2phn_dict):
+# for utt_id, obj in _dict.items():
+
+    # Intialize Which object
+    _w = Which()
+    
+    rtn = {
+        "status": 0,
+        "num_nucleus": 0,
+        "num_consonants": 0,
+        "v_to_c_ratio": 0,
+        "sum_dur_sec": 0,
+        "phones_num": 0,
+        "v_sum_dur_sec": 0,
+        "v_num": 0,
+        "c_sum_dur_sec": 0,
+        "c_num": 0,
+        "mean_v_dur": 0,
+        "mean_c_dur": 0,
+        "mean_p_dur": 0,
+        "p_sum_variance": 0,
+        "v_std_dev": 0,
+        "c_std_dev": 0,
+        "p_std_dev": 0,
+        "varco_P": 0,
+        "varco_V": 0,
+        "varco_C": 0,
+        "percent_v": 0,
+        "speech_rate": 0,
+        "npvi": 0,
+        "npvi_v": 0,
+        "npvi_c": 0,
+        "rpvi": 0,
+        "rpvi_v": 0,
+        "rpvi_c": 0,
+        "cci": 0
+    }
+
+    # words = obj.tiers[0] # Word-level
+    # print("There are {} intervals in file: {}".format(len(words), utt_id))
+
+    nLabel = []
+    # for i in range(len(words)):
+    #     _n = Interval()
+    #     _n.set_start(words[i].minTime)
+    #     _n.set_end(words[i].maxTime)
+    #     _n.set_label(words[i].mark)
+    #     _n.set_type(_w._is(words[i].mark))
+    #     nLabel.append(_n)
+
+    ## Get alignment information from ctm file
+    # ctm_info.append([text_info[i], start_time, duration, round(np.exp(conf),4)])
+    for text, start_time, duration, _ in ctm_info:
+
+        _phns  = word2phn_dict[text.lower()]
+        _start = start_time
+        _inter = duration/len(_phns)
+        _end   = start_time+duration
+        _t_spt = [ [_start+i*_inter, _inter] for i, _ in enumerate(_phns) ]
+
+        for i, (phn, [st_t, d_t]) in enumerate(zip(_phns, _t_spt)):
+
+            _n = Interval()
+            _n.set_start(st_t)
+            _n.set_end(st_t+d_t if i < len(_phns)-1 else _end)
+            _n.set_label(phn)
+            _n.set_type(_w._is(phn))
+            nLabel.append(_n)
+
+    ## Calculate the number of vowels
+    # print("Total number of vowels is counted to estimate average speech rate (i.e. number of syllables per second)")
+    num_nucleus = 0
+    num_consonants = 0
+    for i in nLabel:
+        if i.get_type() == _w.get_v():
+            num_nucleus += 1
+        elif i.get_type() == _w.get_c():
+            num_consonants += 1
+    
+    ## BUG: some utterances do not have consonants or vowels
+    if num_consonants == 0 or num_nucleus == 0:
+        return rtn
+
+    v_to_c_ratio = num_nucleus/num_consonants
+    # print("Number of vocalic nucleus is {}".format(num_nucleus))
+    # print("Number of intervocalic consonants is {}".format(num_consonants))
+    # print("The ratio of vocalic nucleus to intervocalic consonants is: {}".format(v_to_c_ratio))
+    rtn["num_nucleus"] = num_nucleus
+    rtn["num_consonants"] = num_consonants
+    rtn["v_to_c_ratio"] = v_to_c_ratio
+
+    ## Deal with the intervals with continous V or C labels
+    # for i in range(0, len(nLabel)-1):
+    #     label = nLabel[i].get_label()
+    #     nextlabel = nLabel[i+1].get_label()
+    #     if label == "C" and nextlabel == "C":
+    #         Remove right boundary... 1 i
+    #         Replace interval text... 1 i i+1 CC C Literals
+    #         mLabel = Get number of intervals... 1
+    #         nLabel = mLabel
+
+    #     if label == "V" and nextlabel == "V":
+    #         Remove right boundary... 1 i
+    #         Replace interval text... 1 i i+1 VV V Literals
+    #         mLabel = Get number of intervals... 1
+    #         nLabel = mLabel
+
+    # Initialization of variables
+    sum_dur = 0
+    p_num = 0
+    v_sum_dur = 0
+    v_num = 0
+    c_sum_dur = 0
+    c_num = 0
+    p_arr = []
+
+    # print("The consonants and vowels are collapsed to make CV sequence only.")
+
+    for i in nLabel:
+
+        label = i.get_label()
+        _type = i.get_type()
+
+        # This portion is to check whether there are some labels that I missed to change into C's or V's
+        # If there are missing labels, those missing labels will be appear not indented (or tabbed)
+
+        if _type == _w.get_o():
+            continue
+        # else:
+        #     if _type == _w.get_v() or _type == _w.get_c():
+        #         print(label+", Here we go!")
+
+        # Basic duration information of each phone
+        if _type == _w.get_v() or _type == _w.get_c():
+            pbeg = i.get_start()
+            pend = i.get_end()
+            pdur = i.get_dur()*1000
+            sum_dur += pdur
+            p_num += 1
+            p_arr.append(i)
+
+        if _type == _w.get_v():
+            vbeg = i.get_start()
+            vend = i.get_end()
+            vdur = i.get_dur()*1000
+            v_sum_dur += vdur
+            v_num += 1
+            # cv.write("{} {}\n".format(label, vdur))
+
+        if _type == _w.get_c():
+            cbeg = i.get_start()
+            cend = i.get_end()
+            cdur = i.get_dur()*1000
+            c_sum_dur += cdur
+            c_num += 1
+            # cv.write("{} {}\n".format(label, cdur))
+
+    ## BUG: To deal with the division by zero problem, we need to add up the number when cumulative number is 1
+    p_num = p_num if p_num > 1 else 2
+    v_num = v_num if v_num > 1 else 2
+    c_num = c_num if c_num > 1 else 2
+
+    mean_p_dur = sum_dur/(p_num-1)
+    mean_v_dur = v_sum_dur/(v_num-1)
+    mean_c_dur = c_sum_dur/(c_num-1)
+    sum_dur_sec = sum_dur/1000
+    v_sum_dur_sec = v_sum_dur/1000
+    c_sum_dur_sec = c_sum_dur/1000
+    # print("Total duration of non-silent portion of the speech file is: {} seconds".format(sum_dur_sec))
+    # print("Number of phones are: {} phones".format(p_num))
+    # print("Total duration of vocalic intervals is: {} seconds".format(v_sum_dur_sec))
+    # print("Total number of vocalic intervals is: {}".format(v_num))
+    # print("Total duration of intervocalic consonants is: {} seconds".format(c_sum_dur_sec))
+    # print("Total number of consonants is: {}".format(c_num))
+    rtn["sum_dur_sec"] = sum_dur_sec
+    rtn["phones_num"] = p_num
+    rtn["v_sum_dur_sec"] = v_sum_dur_sec
+    rtn["v_num"] = v_num
+    rtn["c_sum_dur_sec"] = c_sum_dur_sec
+    rtn["c_num"] = c_num
+
+    # print("Mean duration of vocalic intervals, intervocalic consonantal intervals")
+    # print("Vocalic intervals: {} milliseconds".format(mean_v_dur))
+    # print("Intervocalic consonantal intervals: {} milliseconds".format(mean_c_dur))
+    # print("Mean (C & V) intervals: {} milliseconds".format(mean_p_dur))
+    rtn["mean_v_dur"] = mean_v_dur
+    rtn["mean_c_dur"] = mean_c_dur
+    rtn["mean_p_dur"] = mean_p_dur
+
+    # initialization II for standard deviation
+    # print("Now we are ready to calculate standard devations")
+
+    p_sum_variance = 0
+    v_sum_variance = 0
+    c_sum_variance = 0
+
+    for i in nLabel:
+
+        label = i.get_label()
+        _type = i.get_type()
+
+        if _type == _w.get_v():
+            vbeg = i.get_start()
+            vend = i.get_end()
+            vdur = i.get_dur()*1000
+
+            p_variance = (vdur - mean_p_dur)**2
+            v_variance = (vdur - mean_v_dur)**2
+
+            p_sum_variance += p_variance
+            v_sum_variance += v_variance
+    
+            # print("{} {} {} {} {}".format(label, p_variance, v_variance, p_sum_variance, v_sum_variance))
+
+        if _type == _w.get_c():
+            cbeg = i.get_start()
+            cend = i.get_end()
+            cdur = i.get_dur()*1000
+
+            p_variance = (cdur - mean_p_dur)**2
+            c_variance = (cdur - mean_c_dur)**2
+
+            p_sum_variance += p_variance
+            c_sum_variance += c_variance
+
+            # print("{} {} {} {} {}".format(label, p_variance, c_variance, p_sum_variance, v_sum_variance))
+
+    # print("Standard Deviation = {}".format(math.sqrt(p_sum_variance)))
+    rtn["p_sum_variance"] = p_sum_variance
+
+    # THIS FORMULA GIVES ME SIMILAR RESULTS TO THE PAPER... HMMM...
+    p_std_dev = math.sqrt(p_sum_variance/(p_num-1))
+    v_std_dev = math.sqrt(v_sum_variance/(v_num-1))
+    c_std_dev = math.sqrt(c_sum_variance/(c_num-1))
+
+    varco_P = (p_std_dev/mean_p_dur)*100
+    varco_V = (v_std_dev/mean_v_dur)*100
+    varco_C = (c_std_dev/mean_c_dur)*100
+
+    # print("Standard deivations for phones, vowels, and consonants")
+    # print("Vocalic intervals: {}".format(v_std_dev))
+    # print("Intervocalic consonantal intervals: {}".format(c_std_dev))
+    # print("Both intervals: {}".format(p_std_dev))
+    # print("...")
+    rtn["v_std_dev"] = v_std_dev
+    rtn["c_std_dev"] = c_std_dev
+    rtn["p_std_dev"] = p_std_dev
+
+    # print("NOW THE RESULTS... %v, delta-V, delta-C, varcoV, varcoC, speech rate")
+    # print("These features called Global Interval Proportions (GIP)")
+    percent_v = (v_sum_dur/sum_dur)*100
+    speech_rate = num_nucleus/(sum_dur/1000)
+
+    # print("%v is {}%".format(percent_v))
+    # print("delta-V is: {}".format(v_std_dev))
+    # print("delta-C is: {}".format(c_std_dev))
+    # print("varcoP is: {}".format(varco_P))
+    # print("varcoV is: {}".format(varco_V))
+    # print("varcoC is: {}".format(varco_C))
+    # print("speech rate: {}".format(speech_rate))
+    # print("...")
+    rtn["varco_P"] = varco_P
+    rtn["varco_V"] = varco_V
+    rtn["varco_C"] = varco_C
+    rtn["percent_v"] = percent_v
+    rtn["speech_rate"] = speech_rate
+
+    # PUT THE RESULTS IN THE IM output
+
+    # print("Write filename, %v, delta V, delta C, Varco V, Varco C, speech rate to a log file")
+    # im.write()
+	# fileappend 'outdir''im-out' 'filename''tab'
+	# 	...'num_nucleus''tab''num_consonants''tab''v_to_c_ratio:2''tab'
+	# 	...'v_num''tab''v_sum_dur_sec:3''tab''c_num''tab''c_sum_dur_sec:3''tab'
+	# 	...'mean_v_dur:3''tab''mean_c_dur:3''tab'
+	# 	...'percent_v:3''tab''v_std_dev:3''tab''c_std_dev:3''tab'
+    #             ...'varco_V:3''tab''varco_C:3''tab''speech_rate:2''newline'
+
+    # Close files
+    # cv.close()
+    # im.close()
+
+    # print("cv.txt is independently saved to be used to calculate PVI (pairwise variability index)")
+    # print("Use python pvi.py cv.txt")
+    # print("Then, you will get ...")
+    # print("nPVI: {}".format(nPVI(_w, p_num, p_arr)))
+    # print("Normalized vocalic scores (nPVI-V): {}".format(nPVI(_w, p_num, p_arr, type=_w.get_v())))
+    # print("Normalized consonantal scores (nPVI-C): {}".format(nPVI(_w, p_num, p_arr, type=_w.get_c())))
+    # print("rPVI: {}".format(rPVI(_w, p_num, p_arr)))
+    # print("raw vocalic scores (rPVI-V): {}".format(rPVI(_w, p_num, p_arr, type=_w.get_v())))
+    # print("raw consonantal scores (rPVI-C): {}".format(rPVI(_w, p_num, p_arr, type=_w.get_c())))
+    # print("CCI: {}".format(CCI(p_num, p_arr)))
+    # print("Done with {}".format(utt_id))
+    # print("Reday to process next file....")
+    rtn["npvi"] = nPVI(_w, p_num, p_arr)
+    rtn["npvi_v"] = nPVI(_w, p_num, p_arr, type=_w.get_v())
+    rtn["npvi_c"] = nPVI(_w, p_num, p_arr, type=_w.get_c())
+    rtn["rpvi"] = rPVI(_w, p_num, p_arr)
+    rtn["rpvi_v"] = rPVI(_w, p_num, p_arr, type=_w.get_v())
+    rtn["rpvi_c"] = rPVI(_w, p_num, p_arr, type=_w.get_c())
+    rtn["cci"] = CCI(p_num, p_arr)
+    rtn["status"] = 1
+
+    return rtn
+
+
+# if __name__:
