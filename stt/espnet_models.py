@@ -324,12 +324,18 @@ class SpeechModel(object):
         return calculate(ctm_info, word2phn_dict)
 
     def get_phone_ctm(self, ctm_info, word2phn_dict):
-        # use g2p model
+
         phone_ctm_info = []
         phone_text = []
         
         for word, start_time, duration, conf in ctm_info:
-            # phones = self.g2p(word)
+
+            word = process_tltchool_gigaspeech_interregnum_tokens(word).lower()
+
+            # it is possible get an empty word due to its interregnum term
+            if word == '':
+                continue
+
             phones = word2phn_dict[word]
             duration /= len(phones)
             
