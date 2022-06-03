@@ -185,6 +185,15 @@ def fix_data_type(data_dict):
             data = np.float64(data)
         if isinstance(data, dict):
             data = fix_data_type(data)
+        if isinstance(data, np.ndarray):
+            data = data.tolist()
         rtn[term] = data
     return rtn
 
+def get_from_dict(_dict, keys_list):
+
+    rtn = {}
+    for key in keys_list:
+        rtn[key] = _dict.get(key)
+    return rtn
+        
