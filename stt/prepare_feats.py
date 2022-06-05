@@ -17,7 +17,8 @@ from utils import (
     opentext,
     readwav,
     fix_data_type,
-    run_cmd
+    run_cmd,
+    get_from_dict
 )
 
 parser = argparse.ArgumentParser()
@@ -196,7 +197,6 @@ for utt_id in tqdm(utt_list):
 
         # BUG: Because of the two dictionaries have different words, we need to extend the dictionary with G2P toolkit
         word2phn_dict = g2p_model.g2p(text, word2phn_dict)
-        text = all_info[utt_id].get('stt')
     else:
         text = text_dict[utt_id]
     
@@ -207,8 +207,7 @@ for utt_id in tqdm(utt_list):
     else:
         textgrid_file_path = speech_model.get_textgrid_mfa(text, wav_path, os.path.join(data_dir, tmp_apl_decoding, 'lexicon'), utt_id, word2phn_dict=word2phn_dict)
         ctm_info = speech_model.get_ctm_from_textgrid(textgrid_file_path)
-    
-    # DEBUG: new
+
     phone_ctm_info, phone_text = speech_model.get_phone_ctm(ctm_info, word2phn_dict)
 
     sil_feats_info, response_duration = speech_model.sil_feats(ctm_info, total_duration)
@@ -225,29 +224,22 @@ for utt_id in tqdm(utt_list):
         tobi_feats_info = audio_model.get_tobi(os.path.abspath(wav_path), os.path.abspath(tobi_path), os.path.abspath(textgrid_file_path))
 
     # Save data
-    save = {
-        'state': 1,
-        'stt': text,
-        'stt(g2p)': phone_text,
-        'prompt': text_prompt,
-        'wav_path': wav_path,
-        'ctm': ctm_info,
-        'pitch': pitch_feats_info,
-        'intensity': intensity_feats_info,
-        'rhythm': rhythm_feats_info,
-        'formant': formants_info,
-        'total_duration': total_duration,
-        'response_duration': response_duration,
-        **f0_info,
-        **energy_info,
-        **sil_feats_info,
-        **word_feats_info,
-        **phone_feats_info
-    }
+    save = { "stt": text, "stt(g2p)": phone_text, "prompt": text_prompt,
+                        "wav_path": wav_path, "ctm": ctm_info, 
+                        "feats": {  **f0_info, **energy_info, 
+                                    **sil_feats_info, **word_feats_info,
+                                    **phone_feats_info,
+                                    "pitch": pitch_feats_info,
+                                    "intensity": intensity_feats_info,
+                                    "formant": formants_info,
+                                    "rhythm": rhythm_feats_info,
+                                    "total_duration": total_duration,
+                                    "response_duration": response_duration}
+           }
 
     # Save data for ToBI
     if not ctc_aligner:
-        save['tobi'] = tobi_feats_info
+        save['feats']['tobi'] = tobi_feats_info
 
     if not args.long_decode_mode:
         all_info[utt_id] = fix_data_type(save)
@@ -267,13 +259,7 @@ if args.long_decode_mode:
     with open(os.path.join(data_dir, tmp_apl_decoding+".list"), "r") as fn:
         for l in tqdm(fn.readlines()):
             l_ = l.split()
-            t = fix_data_type(pikleOpen(l_[1]))
-            # # for i, j in test.items():
-            # #     print(i, type(j))
-            # # input()
-            # f = t['formant'].tolist()
-            # t['formant'] = f
-            all_info[l_[0]] = t
+            all_info[l_[0]] = fix_data_type( pikleOpen(l_[1]) )
 
 # Print out the output dir
 print(output_dir)
@@ -284,7 +270,7 @@ if err_list:
         for utt_id in err_list:
             fn.write(utt_id + "\n")
 
-with open(output_dir + "/all.new.json", "w") as fn:
+with open(output_dir + "/all.json", "w") as fn:
     json.dump({"utts": all_info}, fn, indent=4)
 
 # write STT Result to file
