@@ -3,7 +3,7 @@
 set -euo pipefail
 
 data_root=data
-data_sets="cefr_train_tr cefr_train_cv"
+data_sets="cerf_train_tr cerf_train_cv"
 verbose=0
 CUDA=
 stage=0
